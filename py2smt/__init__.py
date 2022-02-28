@@ -1,148 +1,169 @@
 import ast
-import enum
-from collections import defaultdict, namedtuple
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import Any, List
+
+import py2smt.hir.types as hir_t
+
+from . import hir
 
 
-class Type(enum.Enum):
-    BOOL = 1
-    INT = 2
+@dataclass
+class Expr:
+    pass
 
 
-Variable = namedtuple("Variable", ["name", "type"])
-Assignment = namedtuple("Assignment", ["variable", "expr"])
-
-# Expressions
-Expr = namedtuple("Expr", ["type", "resolution"])
-Var = namedtuple("Var", ["id", "type"])
-Const = namedtuple("Const", ["value", "type"])
-
-Assertion = namedtuple("Assertion", ["type", "lhs", "rhs"])
-
-
-class Visitor(ast.NodeVisitor):
-    def __init__(self):
-        super().__init__()
-
-        self.variables = []
-
-        self.var_map = defaultdict(list)
-        self.assertions = []
-
-    def visit_Assign(self, stmt):
-        assert len(stmt.targets) == 1
-        target = stmt.targets[0]
-        assert isinstance(target, ast.Name)
-        target: ast.Name
-        name = target.id
-
-        value = stmt.value
-        match value:
-            case ast.Constant(value):
-                match value:
-                    case int():
-                        t = Type.INT
-                    case bool():
-                        t = Type.BOOL
-                    case _:
-                        raise NotImplementedError(
-                            "Only int and bool types are supported"
-                        )
-                assignment = Assignment(
-                    variable=Variable(name=name, type=t), expr=Const(value, t)
-                )
-
-            case ast.Name(value):
-                var = self.var(value)
-                assignment = Assignment(
-                    variable=Variable(name=name, type=var.type), expr=var
-                )
-            case _:
-                raise NotImplementedError()
-        self.add_assignment(assignment)
-
-    def add_assignment(self, assignment):
-        var = assignment.variable
-        self.variables.append(var)
-
-        var_id = len(self.variables) - 1
-        self.var_map[var.name].append(var_id)
-        self.assertions.append(Assertion(type="=", lhs=var_id, rhs=assignment.expr))
-
-    def var(self, name):
-        # A var with a name refers to the last assigned version
-        var_id = self.var_map[name][-1]
-        return Var(id=var_id, type=self.variables[var_id].type)
+@dataclass
+class Ident(Expr):
+    id: str
 
     def to_smt(self):
-        counter = defaultdict(int)
-        names = []
-        for var in self.variables:
-            count = counter[var.name]
-            names.append(f"{var.name}{count}")
-            counter[var.name] += 1
-
-        lines = []
-
-        for i, var in enumerate(self.variables):
-            match var.type:
-                case Type.INT:
-                    t = "Int"
-                case Type.BOOL:
-                    t = "Bool"
-                case _:
-                    print(var.type)
-            lines.append(f"(declare-fun {names[i]} () {t})")
-
-        for assertion in self.assertions:
-            name = names[assertion.lhs]
-            match assertion.rhs:
-                case Var(id=i):
-                    rhs = names[i]
-                case Const(value=v):
-                    rhs = str(v)
-            lines.append(f"(assert ({assertion.type} {name} {rhs}))")
-        return lines
+        return self.id
 
 
-class VariableType(enum.Enum):
-    INT = 1
-    BOOL = 2
+@dataclass
+class Constant(Expr):
+    value: Any
+
+    def to_smt(self):
+        return str(self.value)
 
 
-def resolve_assign(ctx, stmt: ast.Assign):
-    assert len(stmt.targets) == 1
-    target = stmt.targets[0]
-    assert isinstance(target, ast.Name)
-    target: ast.Name
-    name = target.id
+@dataclass
+class Call(Expr):
+    func: str
+    args: List[str]
 
-    value = stmt.value
-    match value:
-        case ast.Constant(value):
-            match value:
-                case int():
-                    t = Type.INT
-                case bool():
-                    t = Type.BOOL
-                case _:
-                    raise NotImplementedError("Only int and bool types are supported")
-            assignment = Assignment(
-                variable=Variable(name=name, type=t), expr=Const(value, t)
-            )
-
-        case ast.Name(value):
-            var = ctx.var(value)
-            assignment = Assignment(
-                variable=Variable(name=name, type=var.type), expr=var
-            )
-        case _:
-            raise NotImplementedError()
-    ctx.add_assignment(assignment)
+    def to_smt(self):
+        return f"({self.func} {' '.join(arg.to_smt() for arg in self.args)})"
 
 
-def compile(source: str):
-    syntax = ast.parse(source)
+@dataclass
+class Assertion:
+    expr: Expr
 
-    visitor = Visitor()
-    visitor.visit(syntax)
-    return visitor.to_smt()
+    def to_smt(self):
+        return f"(assert {self.expr.to_smt()})"
+
+
+@dataclass
+class Definition:
+    ident: Ident
+    args: List[str]
+    sort: str
+
+    def to_smt(self):
+        return (
+            f"(declare-fun {self.ident.to_smt()} ({' '.join(self.args)}) {self.sort})"
+        )
+
+
+@dataclass
+class Module:
+    definitions: List[Definition]
+    body: List[Assertion]
+
+    def to_smt(self):
+        return (
+            "\n".join(defn.to_smt() for defn in self.definitions)
+            + "\n"
+            + "\n".join(assertion.to_smt() for assertion in self.body)
+        )
+
+
+class HirVisitor:
+    def __init__(self):
+        self.assertions = []
+        self.var_map = defaultdict(list)
+        self.variables = []
+
+    def visit(self, node):
+        if isinstance(node, hir_t.Assign):
+            return self.visit_Assign(node)
+        elif isinstance(node, hir_t.Name):
+            return self.visit_Name(node)
+        elif isinstance(node, hir_t.BinExpr):
+            return self.visit_BinExpr(node)
+        elif isinstance(node, hir_t.UnaryExpr):
+            return self.visit_UnaryExpr(node)
+        elif isinstance(node, hir_t.Module):
+            return self.visit_Module(node)
+        elif isinstance(node, hir_t.Constant):
+            return self.visit_Constant(node)
+        elif isinstance(node, hir_t.Assert):
+            return self.visit_Assert(node)
+
+    def get_var_name(self, ident: str):
+        return Ident(f"{ident}{len(self.var_map[ident]) - 1}")
+
+    def visit_Module(self, module: hir_t.Module):
+        for stmt in module.body:
+            self.visit(stmt)
+
+        defs = []
+        for ident_name, versions in self.var_map.items():
+            for version, var_id in enumerate(versions):
+                var = self.variables[var_id]
+                ident = Ident(f"{ident_name}{version}")
+                if var.type_ is int:
+                    sort = "Int"
+                elif var.type_ is bool:
+                    sort = "Bool"
+                else:
+                    raise NotImplementedError("Only ints and bools are implemented")
+                defs.append(Definition(ident=ident, args=[], sort=sort))
+        return Module(definitions=defs, body=self.assertions)
+
+    def visit_Assign(self, assign: hir_t.Assign):
+        rhs = self.visit(assign.rhs)
+        lhs = self.visit(assign.lhs)
+        self.assertions.append(Assertion(Call(func="=", args=[lhs, rhs])))
+
+    def visit_Name(self, name: hir_t.Name):
+        if name.ctx == hir_t.ExprContext.STORE:
+            var_id = len(self.variables)
+            self.variables.append(name)
+            self.var_map[name.ident].append(var_id)
+        return self.get_var_name(name.ident)
+
+    def visit_BinExpr(self, expr: hir_t.BinExpr):
+        lhs = self.visit(expr.lhs)
+        rhs = self.visit(expr.rhs)
+        from .hir.types import BinOperator as BO
+
+        op_map = {
+            BO.ADD: "+",
+            BO.SUB: "-",
+            BO.MUL: "*",
+            BO.DIV: "/",
+            BO.AND: "and",
+            BO.OR: "or",
+            BO.EQ: "=",
+        }
+
+        op = op_map[expr.op]
+        return Call(args=[lhs, rhs], func=op)
+
+    def visit_UnaryExpr(self, expr: hir_t.UnaryExpr):
+        operand = self.visit(expr.operand)
+        from .hir.types import UnaryOperator as UO
+
+        op_map = {
+            UO.SUB: "-",
+            UO.NOT: "not",
+        }
+
+        return Call(func=op_map[expr.op], args=[operand])
+
+    def visit_Constant(self, constant: hir_t.Constant):
+        return Constant(value=constant.value)
+
+    def visit_Assert(self, stmt: hir_t.Assert):
+        self.assertions.append(Assertion(self.visit(stmt.test)))
+
+
+def compile(text: str):
+    syntax = ast.parse(text)
+    hir_ = hir.lower_ast_to_hir(syntax)
+    visitor = HirVisitor()
+    return visitor.visit(hir_).to_smt()
