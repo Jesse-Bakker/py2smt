@@ -179,3 +179,30 @@ def test_assert_full():
             ),
         ]
     )
+
+
+def test_if():
+    syntax = ast.parse(
+        """
+if True:
+    pass
+elif False:
+    pass
+else:
+    pass
+"""
+    )
+    check_hir_stmt(
+        syntax,
+        hir.If(
+            test=hir.Constant(type_=bool, value=True),
+            body=[hir.Pass()],
+            orelse=[
+                hir.If(
+                    test=hir.Constant(type_=bool, value=False),
+                    body=[hir.Pass()],
+                    orelse=[hir.Pass()],
+                )
+            ],
+        ),
+    )

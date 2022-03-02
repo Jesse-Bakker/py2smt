@@ -105,3 +105,15 @@ class Assign(Stmt):
 @dataclass
 class Module:
     body: typing.List[Stmt]
+
+
+@dataclass
+class Pass(Stmt):
+    pass
+
+
+@dataclass
+class If(Stmt):
+    test: Expr
+    body: typing.List[Stmt]
+    orelse: typing.List[Stmt]

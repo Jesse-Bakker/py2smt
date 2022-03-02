@@ -1,21 +1,10 @@
 import ast
+from typing import Iterable, List
 
-from .types import (
-    Assert,
-    Assign,
-    BinExpr,
-    BinOperator,
-    Constant,
-    Expr,
-    ExprContext,
-    ExprStmt,
-    IllegalOperationException,
-    Module,
-    Name,
-    UnaryExpr,
-    UnaryOperator,
-    UnsupportedException,
-)
+from .types import (Assert, Assign, BinExpr, BinOperator, Constant, Expr,
+                    ExprContext, ExprStmt, If, IllegalOperationException,
+                    Module, Name, Pass, Stmt, UnaryExpr, UnaryOperator,
+                    UnsupportedException)
 
 
 class AstVisitor(ast.NodeVisitor):
@@ -97,14 +86,32 @@ class AstVisitor(ast.NodeVisitor):
     def visit_Module(self, node: ast.Module):
         # Stmts can be split into multiple statements, for example with multiple
         # assignment: `a = b = 2 -> a = 2; b = 2`, so we unpack here
-        stmts = []
-        for ast_stmt in node.body:
-            stmt = self.visit(ast_stmt)
-            if isinstance(stmt, list):
-                stmts.extend(stmt)
-            else:
-                stmts.append(stmt)
+        stmts = self.flatten_stmts([self.visit(stmt) for stmt in node.body])
         return Module(body=stmts)
+
+    def visit_UnaryOp(self, node: ast.UnaryOp):
+        op = node.op
+        operand = self.visit(node.operand)
+
+        if isinstance(op, ast.UAdd):
+            return operand
+        elif isinstance(op, ast.Not):
+            return UnaryExpr(
+                type_=bool, op=UnaryOperator.NOT, operand=self.expr_to_bool(operand)
+            )
+        elif isinstance(op, ast.USub):
+            if operand.type_ not in (int, float):
+                raise IllegalOperationException(
+                    "The Invert operator `~` is only allowed on numeric types"
+                )
+            return UnaryExpr(type_=int, op=UnaryOperator.SUB, operand=operand)
+        elif isinstance(op, ast.Invert):
+            if operand.type_ is not int:
+                raise IllegalOperationException(
+                    "The Invert operator `~` is only allowed on integers"
+                )
+            return UnaryExpr(type_=int, op=UnaryOperator.INVERT, operand=operand)
+        assert False, "Unexpected unary operator {op}"
 
     def expr_to_bool(self, expr: Expr):
         if expr.type_ is bool:
@@ -128,15 +135,25 @@ class AstVisitor(ast.NodeVisitor):
             return make_expr(float, 0.0)
         else:
             raise UnsupportedException(
-                "Only int's and floats can be converted to boolean expressions"
+                "Only `int`s and `float`s can be converted to boolean expressions"
             )
+
+    def flatten_stmts(self, stmts: Iterable[Stmt | Iterable[Stmt]]) -> List[Stmt]:
+        ret = []
+        for stmt in stmts:
+            if isinstance(stmt, Iterable):
+                for sub_stmt in iter(stmt):
+                    ret.append(sub_stmt)
+            else:
+                ret.append(stmt)
+        return ret
 
     def visit_Assert(self, node: ast.Assert):
         test: Expr = self.visit(node.test)
         test = self.expr_to_bool(test)
         return Assert(test=test)
 
-    def visit_Assign(self, node: ast.Assign):
+    def visit_Assign(self, node: ast.Assign) -> List[Assign]:
         targets = node.targets
         rhs: Expr = self.visit(node.value)
         type_ = rhs.type_
@@ -152,7 +169,7 @@ class AstVisitor(ast.NodeVisitor):
             )
         return stmts
 
-    def visit_Name(self, node: ast.Name):
+    def visit_Name(self, node: ast.Name) -> Name:
         # We only care about loads here, as we handle stores in `visit_Assign`
         if isinstance(node.ctx, ast.Del):
             raise UnsupportedException("Del'ing names is not supported")
@@ -160,6 +177,16 @@ class AstVisitor(ast.NodeVisitor):
         assert isinstance(node.ctx, ast.Load), "Unexpected Store in visit_Name"
 
         return Name(type_=self.names[node.id], ident=node.id, ctx=ExprContext.LOAD)
+
+    def visit_If(self, node: ast.If) -> If:
+        test = self.expr_to_bool(self.visit(node.test))
+        body = self.flatten_stmts([self.visit(stmt) for stmt in node.body])
+
+        orelse = self.flatten_stmts([self.visit(stmt) for stmt in node.orelse])
+        return If(test=test, body=body, orelse=orelse)
+
+    def visit_Pass(self, node: ast.Pass) -> Pass:
+        return Pass()
 
 
 def lower_ast_to_hir(ast: ast.AST):
