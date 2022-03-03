@@ -7,10 +7,6 @@ class UnsupportedException(Exception):
     pass
 
 
-class IllegalOperationException(Exception):
-    pass
-
-
 class ExprContext(Enum):
     LOAD = auto()
     STORE = auto()

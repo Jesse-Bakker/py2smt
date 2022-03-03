@@ -3,6 +3,24 @@
     adds typing information and generalized a bit over the AST during lowering
 """
 from .lower import lower_ast_to_hir
+from .types import (
+    Assert,
+    Assign,
+    BinExpr,
+    BinOperator,
+    Constant,
+    Expr,
+    ExprContext,
+    ExprStmt,
+    If,
+    Module,
+    Name,
+    Pass,
+    Stmt,
+    UnaryExpr,
+    UnaryOperator,
+    UnsupportedException,
+)
 
 __ALL__ = [
     lower_ast_to_hir,

@@ -3,9 +3,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, List
 
-import py2smt.hir.types as hir_t
-
-from . import hir
+from py2smt import hir
+from py2smt.visitor import Visitor
 
 
 @dataclass
@@ -71,32 +70,16 @@ class Module:
         )
 
 
-class HirVisitor:
+class HirVisitor(Visitor):
     def __init__(self):
         self.assertions = []
         self.var_map = defaultdict(list)
         self.variables = []
 
-    def visit(self, node):
-        if isinstance(node, hir_t.Assign):
-            return self.visit_Assign(node)
-        elif isinstance(node, hir_t.Name):
-            return self.visit_Name(node)
-        elif isinstance(node, hir_t.BinExpr):
-            return self.visit_BinExpr(node)
-        elif isinstance(node, hir_t.UnaryExpr):
-            return self.visit_UnaryExpr(node)
-        elif isinstance(node, hir_t.Module):
-            return self.visit_Module(node)
-        elif isinstance(node, hir_t.Constant):
-            return self.visit_Constant(node)
-        elif isinstance(node, hir_t.Assert):
-            return self.visit_Assert(node)
-
     def get_var_name(self, ident: str):
         return Ident(f"{ident}{len(self.var_map[ident]) - 1}")
 
-    def visit_Module(self, module: hir_t.Module):
+    def visit_Module(self, module: hir.Module):
         for stmt in module.body:
             self.visit(stmt)
 
@@ -114,19 +97,19 @@ class HirVisitor:
                 defs.append(Definition(ident=ident, args=[], sort=sort))
         return Module(definitions=defs, body=self.assertions)
 
-    def visit_Assign(self, assign: hir_t.Assign):
+    def visit_Assign(self, assign: hir.Assign):
         rhs = self.visit(assign.rhs)
         lhs = self.visit(assign.lhs)
         self.assertions.append(Assertion(Call(func="=", args=[lhs, rhs])))
 
-    def visit_Name(self, name: hir_t.Name):
-        if name.ctx == hir_t.ExprContext.STORE:
+    def visit_Name(self, name: hir.Name):
+        if name.ctx == hir.ExprContext.STORE:
             var_id = len(self.variables)
             self.variables.append(name)
             self.var_map[name.ident].append(var_id)
         return self.get_var_name(name.ident)
 
-    def visit_BinExpr(self, expr: hir_t.BinExpr):
+    def visit_BinExpr(self, expr: hir.BinExpr):
         lhs = self.visit(expr.lhs)
         rhs = self.visit(expr.rhs)
         from .hir.types import BinOperator as BO
@@ -144,7 +127,7 @@ class HirVisitor:
         op = op_map[expr.op]
         return Call(args=[lhs, rhs], func=op)
 
-    def visit_UnaryExpr(self, expr: hir_t.UnaryExpr):
+    def visit_UnaryExpr(self, expr: hir.UnaryExpr):
         operand = self.visit(expr.operand)
         from .hir.types import UnaryOperator as UO
 
@@ -155,10 +138,10 @@ class HirVisitor:
 
         return Call(func=op_map[expr.op], args=[operand])
 
-    def visit_Constant(self, constant: hir_t.Constant):
+    def visit_Constant(self, constant: hir.Constant):
         return Constant(value=constant.value)
 
-    def visit_Assert(self, stmt: hir_t.Assert):
+    def visit_Assert(self, stmt: hir.Assert):
         self.assertions.append(Assertion(self.visit(stmt.test)))
 
 
