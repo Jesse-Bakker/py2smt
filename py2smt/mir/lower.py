@@ -1,4 +1,3 @@
-import itertools
 import typing
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -29,13 +28,13 @@ PREDEFINED_FUNCTIONS = {
 
 
 @dataclass
-class Scope:
-    parent: typing.Optional["Scope"] = None
+class Branch:
+    parent: typing.Optional["Branch"] = None
     idx: int = 0
 
     # Monotonically growing index. When merging subscopes, this does not reset to avoid conflicts with future subscopes
     subscope_idx: int = -1
-    subscopes: typing.List["Scope"] = field(default_factory=list)
+    subscopes: typing.List["Branch"] = field(default_factory=list)
     variables: typing.Dict[mir.Ident, typing.List[mir.Var]] = field(
         default_factory=dict
     )
@@ -47,9 +46,9 @@ class Scope:
             yield it
             it = it.parent
 
-    def subscope(self) -> "Scope":
+    def subscope(self) -> "Branch":
         self.subscope_idx += 1
-        new = Scope(parent=self, idx=self.subscope_idx, subscopes=[])
+        new = Branch(parent=self, idx=self.subscope_idx, subscopes=[])
         self.subscopes.append(new)
         return new
 
@@ -118,7 +117,7 @@ class HirVisitor(Visitor):
         self.functions = []
         self.func_map = {}
 
-        self.scope = Scope()
+        self.scope = Branch()
 
     def push_scope(self):
         self.scope = self.scope.subscope()
@@ -179,7 +178,7 @@ class HirVisitor(Visitor):
 
     def visit_If(self, if_stmt: hir.If):
         condition = self.visit(if_stmt.test)
-        scope = self.push_scope()
+        self.push_scope()
         self.condition_stack.append(condition)
         body_stmts = self.visit_stmts(if_stmt.body)
         self.condition_stack[-1] = self.not_expr(condition)

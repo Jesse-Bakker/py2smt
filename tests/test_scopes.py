@@ -1,9 +1,9 @@
-from py2smt.mir.lower import Scope
+from py2smt.mir.lower import Branch
 from py2smt.mir.types import Assign, Constant, Ident, Var
 
 
 def test_simple_reconcile():
-    scope = Scope()
+    scope = Branch()
     sub1 = scope.subscope()
     sub1.condition = Constant(type_=bool, value=True)
     sub1.store_var(Ident("test"), int)
@@ -24,7 +24,7 @@ def test_simple_reconcile():
 
 
 def test_full():
-    scope = Scope()
+    scope = Branch()
     sub1 = scope.subscope()
     assert sub1.canonical_idx() == [0, 0]
 
