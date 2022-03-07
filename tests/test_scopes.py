@@ -1,11 +1,11 @@
-from py2smt.mir.lower import Branch
+from py2smt.mir.lower import Scope
 from py2smt.mir.types import Assign, Constant, Ident, Var
 
 
 def test_simple_reconcile():
-    scope = Branch()
-    sub1 = scope.subscope()
-    sub1.condition = Constant(type_=bool, value=True)
+    scope = Scope()
+
+    sub1 = scope.subscope(condition=Constant(type_=bool, value=True))
     sub1.store_var(Ident("test"), int)
 
     assigns = scope.reconcile_subscopes()
@@ -16,7 +16,7 @@ def test_simple_reconcile():
 
     assert assigns == [
         Assign(
-            path_condition=[sub1.condition],
+            path_condition=sub1.condition,
             lhs=Var(ident=Ident("test"), type_=int, version=0, scope=[0]),
             rhs=Var(ident=Ident("test"), type_=int, version=0, scope=[0, 0]),
         ),
@@ -24,15 +24,12 @@ def test_simple_reconcile():
 
 
 def test_full():
-    scope = Branch()
-    sub1 = scope.subscope()
+    scope = Scope()
+    sub1 = scope.subscope(Constant(type_=bool, value=False))
     assert sub1.canonical_idx() == [0, 0]
 
-    sub2 = scope.subscope()
+    sub2 = scope.subscope(Constant(type_=bool, value=True))
     assert sub2.canonical_idx() == [0, 1]
-
-    sub1.condition = Constant(type_=bool, value=False)
-    sub2.condition = Constant(type_=bool, value=True)
 
     scope.store_var(Ident("b"), int)
 
@@ -87,22 +84,22 @@ def test_full():
 
     assert assigns == [
         Assign(
-            path_condition=[sub1.condition],
+            path_condition=sub1.condition,
             lhs=Var(version=0, scope=[0], type_=int, ident=Ident("a")),
             rhs=Var(version=0, scope=[0, 0], type_=int, ident=Ident("a")),
         ),
         Assign(
-            path_condition=[sub2.condition],
+            path_condition=sub2.condition,
             lhs=Var(version=0, scope=[0], type_=int, ident=Ident("a")),
             rhs=Var(version=0, scope=[0, 1], type_=int, ident=Ident("a")),
         ),
         Assign(
-            path_condition=[sub1.condition],
+            path_condition=sub1.condition,
             lhs=Var(version=1, scope=[0], type_=int, ident=Ident("b")),
             rhs=Var(version=0, scope=[0], type_=int, ident=Ident("b")),
         ),
         Assign(
-            path_condition=[sub2.condition],
+            path_condition=sub2.condition,
             lhs=Var(version=1, scope=[0], type_=int, ident=Ident("b")),
             rhs=Var(version=0, scope=[0, 1], type_=int, ident=Ident("b")),
         ),

@@ -3,7 +3,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, List
 
-from py2smt import hir
+from py2smt import hir, mir
 from py2smt.visitor import Visitor
 
 

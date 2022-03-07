@@ -56,3 +56,10 @@ class Assign(Stmt):
 @dataclass
 class Constant(Expr):
     value: typing.Any
+
+
+@dataclass
+class Module:
+    vars: typing.List[Var]
+    body: typing.List[Stmt]
+    funcs: typing.Mapping[FuncId, Func]
