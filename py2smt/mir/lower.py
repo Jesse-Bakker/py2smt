@@ -15,7 +15,7 @@ PREDEFINED_FUNCTIONS = {
     -4: mir.Func(id=mir.FuncId(-4), ident=mir.Ident("*")),
     -5: mir.Func(id=mir.FuncId(-5), ident=mir.Ident("/")),
     -6: mir.Func(id=mir.FuncId(-6), ident=mir.Ident("mod")),
-    -7: mir.Func(id=mir.FuncId(-7), ident=mir.Ident("==")),
+    -7: mir.Func(id=mir.FuncId(-7), ident=mir.Ident("=")),
     -8: mir.Func(id=mir.FuncId(-8), ident=mir.Ident("<")),
     -9: mir.Func(id=mir.FuncId(-9), ident=mir.Ident("<=")),
     -10: mir.Func(id=mir.FuncId(-10), ident=mir.Ident(">")),
@@ -200,7 +200,16 @@ class HirVisitor(Visitor):
         )
 
     def visit_stmts(self, stmts: typing.List[hir.Stmt]):
-        return [self.visit(stmt) for stmt in stmts if not isinstance(stmt, hir.Pass)]
+        ret = []
+        for stmt in stmts:
+            if isinstance(stmt, hir.Pass):
+                continue
+            visited = self.visit(stmt)
+            if isinstance(visited, list):
+                ret.extend(visited)
+            else:
+                ret.append(visited)
+        return ret
 
     def visit_If(self, if_stmt: hir.If):
         condition = self.visit(if_stmt.test)
@@ -216,7 +225,7 @@ class HirVisitor(Visitor):
     def visit_Module(self, module: hir.Module):
         stmts = self.visit_stmts(module.body)
         return mir.Module(
-            vars=[var for ident in self.scope.variables for var in ident],
+            vars=[var for ident in self.scope.variables.values() for var in ident],
             body=stmts,
             funcs={},
         )

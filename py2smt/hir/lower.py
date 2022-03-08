@@ -2,10 +2,24 @@ import ast
 from typing import Iterable, List
 
 from py2smt.exceptions import IllegalOperationException
-from py2smt.hir.types import (Assert, Assign, BinExpr, BinOperator, Constant,
-                              Expr, ExprContext, ExprStmt, If, Module, Name,
-                              Pass, Stmt, UnaryExpr, UnaryOperator,
-                              UnsupportedException)
+from py2smt.hir.types import (
+    Assert,
+    Assign,
+    BinExpr,
+    BinOperator,
+    Constant,
+    Expr,
+    ExprContext,
+    ExprStmt,
+    If,
+    Module,
+    Name,
+    Pass,
+    Stmt,
+    UnaryExpr,
+    UnaryOperator,
+    UnsupportedException,
+)
 
 
 class AstVisitor(ast.NodeVisitor):
