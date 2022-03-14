@@ -2,10 +2,11 @@ import typing
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from py2smt import hir, mir
+from py2smt import hir
 from py2smt.exceptions import IllegalOperationException
 from py2smt.hir import BinOperator as BO
 from py2smt.hir import UnaryOperator as UO
+from py2smt.mir import types as mir
 from py2smt.visitor import Visitor
 
 PREDEFINED_FUNCTIONS = {
