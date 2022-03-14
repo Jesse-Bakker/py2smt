@@ -27,6 +27,34 @@ class AstVisitor(ast.NodeVisitor):
         super().__init__()
         self.names = {}
 
+    def generic_visit(self, node):
+        print(node)
+        assert False, "Unreachable"
+
+    def visit_Compare(self, node: ast.Compare):
+        if len(node.comparators) > 1:
+            raise UnsupportedException("Chained comparisons are not supported")
+        lhs = self.visit(node.left)
+        rhs = self.visit(node.comparators[0])
+        op = node.ops[0]
+
+        if isinstance(op, ast.NotEq):
+            return UnaryExpr(
+                type_=bool,
+                op=UnaryOperator.NOT,
+                operand=BinExpr(lhs=lhs, rhs=rhs, op=BinOperator.EQ, type_=bool),
+            )
+
+        BO = BinOperator
+        operator_map = {
+            ast.Eq: BO.EQ,
+            ast.Lt: BO.MUL,
+            ast.LtE: BO.DIV,
+            ast.Gt: BO.MOD,
+            ast.GtE: BO.POW,
+        }
+        return BinExpr(type_=bool, lhs=lhs, rhs=rhs, op=operator_map[type(op)])
+
     def visit_BinOp(self, node) -> BinExpr:
         BO = BinOperator
         operator_map = {

@@ -2,14 +2,32 @@ from typing import List
 
 import z3  # type: ignore
 
-from py2smt import compile
+from py2smt import get_smt
+
+
+def normalize_whitespace(smt: str):
+    n = 0
+
+    def ws_filter(c):
+        nonlocal n
+        if c == "(":
+            n += 1
+        elif c == ")":
+            n -= 1
+        elif c == "\n":
+            if n == 0:
+                return True
+            return False
+        return True
+
+    return "".join(filter(ws_filter, smt))
 
 
 def check_smt(text: str, smt: List[str], sat: bool = True):
-    actual = compile(text)
-    expected = "\n".join(smt)
+    actual = [s for smt in get_smt(text) for s in smt.splitlines()]
+    expected = smt
     assert actual == expected
-    z3_inp = z3.parse_smt2_string(actual)
+    z3_inp = z3.parse_smt2_string("\n".join(actual))
     solver = z3.SimpleSolver()
     solver.add(z3_inp)
     if sat:
@@ -82,7 +100,6 @@ assert a
         "(declare-fun a$0$0 () Int)",
         "(assert (= a$0$0 1))",
         "(push 1)",
-        "",
         "(assert (not (not (= a$0$0 0))))",
         "(check-sat)",
         "(pop 1)",

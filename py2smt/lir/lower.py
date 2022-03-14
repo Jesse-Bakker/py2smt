@@ -2,13 +2,16 @@ import typing
 from collections import ChainMap
 from dataclasses import dataclass
 
+import z3
+
 from py2smt import mir
 from py2smt.visitor import Visitor
 
 
 @dataclass
 class Expr:
-    pass
+    def to_smt(self):
+        raise NotImplementedError
 
 
 @dataclass
@@ -29,8 +32,8 @@ class Ident(Expr):
 
 @dataclass
 class FunctionDef:
-    sort: str
-    args: typing.List[str]
+    sort: z3.SortRef
+    args: typing.List[z3.SortRef]
     ident: Ident
 
     def to_smt(self):
@@ -53,9 +56,12 @@ class ValidityScope:
     assumptions: typing.List[Assume]
 
     def to_smt(self):
-        assumptions = "\n".join(ass.to_smt() for ass in self.assumptions)
-        return f"""(push 1)
-{assumptions}
+        assumptions = (
+            ("\n" + "\n".join(ass.to_smt() for ass in self.assumptions))
+            if self.assumptions
+            else ""
+        )
+        return f"""(push 1){assumptions}
 (assert (not {self.test.to_smt()}))
 (check-sat)
 (pop 1)"""
@@ -71,10 +77,16 @@ class Call(Expr):
         return f"({self.func} {args})"
 
 
+@dataclass
+class Model:
+    function_defs: typing.List[FunctionDef]
+    body: typing.List[Assume | ValidityScope]
+
+
 class MirVisitor(Visitor):
     SORT_MAP = {
-        int: "Int",
-        bool: "Bool",
+        int: z3.IntSort,
+        bool: z3.BoolSort,
     }
 
     def __init__(self):
@@ -98,20 +110,22 @@ class MirVisitor(Visitor):
         return Assume(call)
 
     def visit_Module(self, module: mir.Module):
-        for var in module.vars:
-            yield FunctionDef(
-                sort=self.SORT_MAP[var.type_], args=[], ident=self.visit(var)
-            )
+        decls = [
+            FunctionDef(sort=self.SORT_MAP[var.type_](), args=[], ident=self.visit(var))
+            for var in module.vars
+        ]
 
         for func in module.funcs:
             # TODO: add function def
             break
 
         self.func_map.maps.append(module.funcs)
-
+        body = []
         for stmt in module.body:
             if (visited := self.visit(stmt)) is not None:
-                yield visited
+                body.append(visited)
+
+        return Model(function_defs=decls, body=body)
 
     def visit_Call(self, call: mir.Call):
         func = self.func_map[call.func]
@@ -121,6 +135,6 @@ class MirVisitor(Visitor):
         return ValidityScope(test=self.visit(assertion.test), assumptions=[])
 
 
-def lower_mir_to_lir(mir: mir.Module):
+def lower_mir_to_lir(mir: mir.Module) -> Model:
     visitor = MirVisitor()
-    return list(visitor.visit(mir))
+    return visitor.visit(mir)
