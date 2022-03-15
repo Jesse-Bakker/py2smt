@@ -113,3 +113,14 @@ class If(Stmt):
     test: Expr
     body: typing.List[Stmt]
     orelse: typing.List[Stmt]
+
+
+@dataclass
+class FuncDef(Stmt):
+    name: str
+    preconditions: typing.List[Expr]
+    postconditions: typing.List[Expr]
+
+    ret_type: type
+    arguments: typing.List[Name]
+    body: typing.List[Stmt]

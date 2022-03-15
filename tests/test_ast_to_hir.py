@@ -206,3 +206,26 @@ else:
             ],
         ),
     )
+
+
+def test_simple_func():
+    syntax = ast.parse(
+        """
+def func(a: int, b: bool) -> int:
+    pass
+"""
+    )
+    check_hir_stmt(
+        syntax,
+        hir.FuncDef(
+            name="func",
+            preconditions=[],
+            postconditions=[],
+            ret_type=int,
+            arguments=[
+                hir.Name(type_=int, ident="a", ctx=hir.ExprContext.LOAD),
+                hir.Name(type_=bool, ident="b", ctx=hir.ExprContext.LOAD),
+            ],
+            body=[hir.Pass()],
+        ),
+    )

@@ -11,6 +11,7 @@ from py2smt.hir.types import (
     Expr,
     ExprContext,
     ExprStmt,
+    FuncDef,
     If,
     Module,
     Name,
@@ -185,9 +186,8 @@ class AstVisitor(ast.NodeVisitor):
         ret = []
         for stmt in stmts:
             if isinstance(stmt, Iterable):
-                for sub_stmt in iter(stmt):
-                    ret.append(sub_stmt)
-            else:
+                ret.extend(self.flatten_stmts(stmt))
+            elif stmt is not None:
                 ret.append(stmt)
         return ret
 
@@ -228,8 +228,103 @@ class AstVisitor(ast.NodeVisitor):
         orelse = self.flatten_stmts([self.visit(stmt) for stmt in node.orelse])
         return If(test=test, body=body, orelse=orelse)
 
+    def visit_Attribute(self, attr: ast.Attribute) -> Name:
+        error = UnsupportedException("Attribute access is not supported")
+
+        if isinstance(attr.value, ast.Attribute):
+            if not isinstance(attr.value.value, ast.Name) or not (
+                attr.value.value.id == "py2smt" and attr.value.attr == "param"
+            ):
+                raise error
+            else:
+                name = attr.attr
+        elif isinstance(attr.value, ast.Name) and attr.value.id == "param":
+            name = attr.attr
+        else:
+            raise error
+        return Name(type_=self.names[name], ident=name, ctx=ExprContext.LOAD)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        name = node.name
+
+        def type_from_annotation(annotation: ast.expr):
+            if isinstance(annotation, ast.Name):
+                t = eval(annotation.id)
+            else:
+                raise UnsupportedException(
+                    "Only `type` return type expressions are supported"
+                )
+            if t not in (int, bool, float):
+                raise UnsupportedException(
+                    f"Unsupported return type for function `{name}`"
+                )
+            return t
+
+        return_type = type_from_annotation(node.returns) if node.returns else None
+        # Only regular arguments are supported for now
+        if node.args.posonlyargs or node.args.kwonlyargs or node.args.defaults:
+            raise UnsupportedException(
+                "Only regular, non-defaulted, type-annotated arguments are supported. "
+                f"Violating function: {name}"
+            )
+
+        args = {}
+        for arg in node.args.args:
+            if not arg.annotation:
+                raise UnsupportedException(
+                    "Only type-annotated arguments are supported"
+                )
+            type_ = type_from_annotation(arg.annotation)
+            args[arg.arg] = Name(ident=arg.arg, type_=type_, ctx=ExprContext.LOAD)
+
+        # We use a subvisitor here so only the function arguments are in scope.
+        # This prevents name clashes when resolving pre- and post-conditions
+        # and the function body.
+        subvisitor = AstVisitor()
+        subvisitor.names = args
+
+        def resolve_condition(condition: ast.Call):
+            for expr in condition.args:
+                return [subvisitor.visit(expr) for expr in condition.args]
+
+        preconditions = []
+        postconditions = []
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Call):
+                if decorator.func == "assumes":
+                    preconditions.extend(resolve_condition(decorator))
+                if decorator.func == "ensures":
+                    postconditions.extend(resolve_condition(decorator))
+                else:
+                    raise UnsupportedException(
+                        "Only pre- and post-condition decorators are supported"
+                    )
+            else:
+                raise UnsupportedException(
+                    "Only pre- and post-condition decorators are supported"
+                )
+
+        body = self.flatten_stmts([subvisitor.visit(stmt) for stmt in node.body])
+        return FuncDef(
+            name=name,
+            preconditions=preconditions,
+            postconditions=postconditions,
+            ret_type=return_type,
+            arguments=list(args.values()),
+            body=body,
+        )
+
     def visit_Pass(self, node: ast.Pass) -> Pass:
         return Pass()
+
+    def visit_Import(self, node: ast.Import):
+        if any(name != "py2smt" for name in node.names):
+            raise UnsupportedException("Imports are not supported")
+
+    def visit_ImportFrom(self, node: ast.ImportFrom):
+        # Very crude. Maybe resolve the import?
+        if node.module != "py2smt":
+            raise UnsupportedException("Imports are not supported")
 
 
 def lower_ast_to_hir(ast: ast.AST):
