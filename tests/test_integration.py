@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from py2smt import CheckFailed, check
+from py2smt.check import CheckFailed, check
 
 
 def test_integration(testfile_name):

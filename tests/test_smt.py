@@ -2,7 +2,7 @@ from typing import List
 
 import z3  # type: ignore
 
-from py2smt import get_smt
+from py2smt.check import get_smt
 
 
 def normalize_whitespace(smt: str):
