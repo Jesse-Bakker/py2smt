@@ -229,3 +229,33 @@ def func(a: int, b: bool) -> int:
             body=[hir.Pass()],
         ),
     )
+
+
+def test_func_preconditions():
+    syntax = ast.parse(
+        """
+@assumes(param.a > 0)
+def func(a: int):
+    pass
+"""
+    )
+    check_hir_stmt(
+        syntax,
+        hir.FuncDef(
+            name="func",
+            preconditions=[
+                hir.BinExpr(
+                    type_=bool,
+                    op=hir.BinOperator.GT,
+                    lhs=hir.Name(type_=int, ident="a", ctx=hir.ExprContext.LOAD),
+                    rhs=hir.Constant(type_=int, value=0),
+                )
+            ],
+            postconditions=[],
+            ret_type=None,
+            arguments=[
+                hir.Name(type_=int, ident="a", ctx=hir.ExprContext.LOAD),
+            ],
+            body=[hir.Pass()],
+        ),
+    )

@@ -51,7 +51,7 @@ class AstVisitor(ast.NodeVisitor):
             ast.Eq: BO.EQ,
             ast.Lt: BO.MUL,
             ast.LtE: BO.DIV,
-            ast.Gt: BO.MOD,
+            ast.Gt: BO.GT,
             ast.GtE: BO.POW,
         }
         return BinExpr(type_=bool, lhs=lhs, rhs=rhs, op=operator_map[type(op)])
@@ -281,7 +281,7 @@ class AstVisitor(ast.NodeVisitor):
         # This prevents name clashes when resolving pre- and post-conditions
         # and the function body.
         subvisitor = AstVisitor()
-        subvisitor.names = args
+        subvisitor.names = {name: arg.type_ for name, arg in args.items()}
 
         def resolve_condition(condition: ast.Call):
             for expr in condition.args:
@@ -291,9 +291,13 @@ class AstVisitor(ast.NodeVisitor):
         postconditions = []
         for decorator in node.decorator_list:
             if isinstance(decorator, ast.Call):
-                if decorator.func == "assumes":
+                if not isinstance(decorator.func, ast.Name):
+                    raise UnsupportedException(
+                        "Higher level functions are not supported"
+                    )
+                if decorator.func.id == "assumes":
                     preconditions.extend(resolve_condition(decorator))
-                if decorator.func == "ensures":
+                elif decorator.func.id == "ensures":
                     postconditions.extend(resolve_condition(decorator))
                 else:
                     raise UnsupportedException(
