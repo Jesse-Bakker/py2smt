@@ -97,6 +97,10 @@ class AstVisitor(ast.NodeVisitor):
         return hir.BinExpr(lhs=lhs, rhs=rhs, op=op, type_=type_)
 
     def visit_BoolOp(self, node: ast.BoolOp):
+        if len(node.values) > 2:
+            raise hir.UnsupportedException(
+                "Chained boolean operators are not supported"
+            )
         lhs = self.visit(node.values[0])
         rhs = self.visit(node.values[1])
 

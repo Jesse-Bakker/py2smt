@@ -145,6 +145,8 @@ class Branch:
         new = mir.Var(
             type_=type_, version=len(versions), scope=self.canonical_idx(), ident=ident
         )
+        if versions:
+            new.ast_node = versions[-1].ast_node
         return new
 
     def store_var(self, ident: mir.Ident, type_: type) -> mir.Var:
@@ -261,17 +263,19 @@ class HirVisitor(Visitor):
         ]
         body = visitor.visit_stmts(funcdef.body)
         postconditions = [visitor.visit(expr) for expr in funcdef.postconditions]
-        postcondition = mir.Call(
-            type_=bool,
-            func=mir.FuncId(PREDEFINED_FUNCTION_MAP[BO.AND]),
-            args=postconditions,
-        )
-        postcondition_assert = mir.Assert(
-            test=postcondition, path_condition=self.scope.condition
-        )
-        postcondition_assert.ast_node = funcdef.post_astnode
-
-        body = [*preconditions, *body, postcondition_assert]
+        if postconditions:
+            postcondition = mir.Call(
+                type_=bool,
+                func=mir.FuncId(PREDEFINED_FUNCTION_MAP[BO.AND]),
+                args=postconditions,
+            )
+            postcondition_assert = mir.Assert(
+                test=postcondition, path_condition=self.scope.condition
+            )
+            postcondition_assert.ast_node = funcdef.post_astnode
+            body = [*preconditions, *body, postcondition_assert]
+        else:
+            body = [*preconditions, *body]
 
         vars_ = [var for ident in visitor.scope.variables.values() for var in ident]
         ret = mir.FuncDef(

@@ -210,9 +210,10 @@ class MirVisitor(Visitor):
         postconditions = [
             self.visit(condition) for condition in funccall.postconditions
         ]
-        post = self.and_exprs(postconditions)
-        # Assign temp var
-        self.add_stmt(Assume(post), funccall)
+        if postconditions:
+            post = self.and_exprs(postconditions)
+            # Assign temp var
+            self.add_stmt(Assume(post), funccall)
         return return_value
 
     def visit_NamedExpr(self, expr: mir.NamedExpr):

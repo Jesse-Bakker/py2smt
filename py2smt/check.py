@@ -46,6 +46,7 @@ def check_inner(text: str):
                 )
             if solver.check(*assumptions) != z3.unsat:
                 model = solver.model()
+                print(model)
                 tuples = [
                     (model.get_interp(decl), decls_orig[decl.name()])
                     for decl in model.decls()
