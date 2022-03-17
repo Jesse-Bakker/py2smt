@@ -1,3 +1,4 @@
+import functools
 from unittest import mock
 
 _param = mock.MagicMock()
@@ -22,6 +23,7 @@ def __old__(*args, **kwargs):
 
 
 def assumes(*args):
+    @functools.wraps
     def inner(function):
         return function
 
@@ -29,7 +31,12 @@ def assumes(*args):
 
 
 def ensures(*args):
+    @functools.wraps
     def inner(function):
         return function
 
     return inner
+
+
+def loop_invariant(*args):
+    pass

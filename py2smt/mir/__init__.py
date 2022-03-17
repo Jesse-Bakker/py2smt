@@ -12,6 +12,8 @@ from .types import (
     FuncId,
     Ident,
     Module,
+    NamedExpr,
+    Node,
     Stmt,
     Var,
 )

@@ -1,3 +1,4 @@
+import ast
 import typing
 from collections import ChainMap
 from dataclasses import dataclass, field
@@ -9,13 +10,21 @@ from py2smt.visitor import Visitor
 
 
 @dataclass
-class Expr:
+class Node:
+    ast_node: typing.Optional[ast.AST] = field(compare=False, init=False)
+
+    def __post_init__(self):
+        self.ast_node = None
+
+
+@dataclass
+class Expr(Node):
     def to_smt(self):
         raise NotImplementedError
 
 
 @dataclass
-class Constant:
+class Constant(Node):
     value: typing.Any
 
     def to_smt(self):
@@ -31,7 +40,7 @@ class Ident(Expr):
 
 
 @dataclass
-class FunctionDef:
+class FunctionDef(Node):
     sort: z3.SortRef
     args: typing.List[z3.SortRef]
     ident: Ident
@@ -43,7 +52,7 @@ class FunctionDef:
 
 
 @dataclass
-class Assume:
+class Assume(Node):
     expr: Expr
 
     def to_smt(self):
@@ -51,7 +60,7 @@ class Assume:
 
 
 @dataclass
-class Scope:
+class Scope(Node):
     stmts: typing.Any
 
     def to_smt(self):
@@ -62,7 +71,8 @@ class Scope:
 
 
 @dataclass
-class ValidityScope:
+class ValidityScope(Node):
+    ctx_name: str
     test: Expr
     assumptions: typing.List[Assume]
     post: typing.List[Assume] = field(default_factory=list)
@@ -93,7 +103,7 @@ class Call(Expr):
 
 
 @dataclass
-class Model:
+class Model(Node):
     function_defs: typing.List[FunctionDef]
     body: typing.List[Assume | ValidityScope]
 
@@ -111,6 +121,7 @@ class MirVisitor(Visitor):
         self.decls = []
         self.call_ctr = 0
         self.in_funcdef = False
+        self.ctx_name = "__main__"
 
     def visit_Var(self, var: mir.Var):
         scope = "_".join(str(idx) for idx in var.scope)
@@ -130,11 +141,12 @@ class MirVisitor(Visitor):
             else:
                 condition = self.visit(pc[0])
             call = Call(func="=>", args=[condition, call])
-        self.stmts.append(Assume(call))
+        call.ast_node = assign.ast_node
+        self.add_stmt(Assume(call), assign)
 
     def visit_Module(self, module: mir.Module):
         for var in module.vars:
-            self.add_const(self.visit(var), var.type_)
+            self.add_const(self.visit(var), var.type_, var)
 
         self.func_map.maps.append(module.funcs)
         for stmt in module.body:
@@ -147,56 +159,66 @@ class MirVisitor(Visitor):
         return Call(func=func.ident, args=[self.visit(arg) for arg in call.args])
 
     def visit_Assert(self, assertion: mir.Assert):
-        self.stmts.append(
-            ValidityScope(test=self.visit(assertion.test), assumptions=[])
+        self.add_stmt(
+            ValidityScope(
+                test=self.visit(assertion.test), assumptions=[], ctx_name=self.ctx_name
+            ),
+            assertion,
         )
 
     def visit_FuncDef(self, funcdef: mir.FuncDef):
+        old_ctx, self.ctx_name = funcdef.name, self.ctx_name
         prefix = self.prefix
         self.prefix = f"{prefix}{funcdef.name}!"
         self.in_funcdef = True
-        variables = []
         for variable in funcdef.variables:
-            variables.append(
-                FunctionDef(
-                    sort=self.SORT_MAP[variable.type_](),
-                    args=[],
-                    ident=self.visit(variable),
-                )
-            )
-        self.decls.extend(variables)
-        ret = Scope([self.visit(a) for a in funcdef.body])
+            self.add_const(self.visit(variable), variable.type_, variable)
+        for a in funcdef.body:
+            self.visit(a)
         self.prefix = prefix
-        self.stmts.append(ret)
         self.in_funcdef = False
+        self.ctx_name = old_ctx
 
     def visit_Assumption(self, assumption: mir.Assumption):
-        self.stmts.append(Assume(self.visit(assumption.expr)))
+        self.add_stmt(Assume(self.visit(assumption.expr)), assumption)
 
     def and_exprs(self, exprs: typing.List[Expr]):
         return Call(func="and", args=exprs)
 
-    def add_const(self, ident: Ident, type_: type):
+    def add_const(self, ident: Ident, type_: type, from_: mir.Node):
         def_ = FunctionDef(sort=self.SORT_MAP[type_](), ident=ident, args=[])
+        def_.ast_node = from_.ast_node
         self.decls.append(def_)
+
+    def add_stmt(self, stmt: Node, from_: mir.Node):
+        stmt.ast_node = from_.ast_node
+        self.stmts.append(stmt)
 
     def visit_FuncCall(self, funccall: mir.FuncCall):
 
         preconditions = [self.visit(condition) for condition in funccall.preconditions]
         if preconditions:
             pre = self.and_exprs(preconditions)
-            self.stmts.append(ValidityScope(test=pre, assumptions=[]))
+            self.add_stmt(
+                ValidityScope(test=pre, assumptions=[], ctx_name=self.ctx_name),
+                funccall,
+            )
 
         self.call_ctr += 1
         return_value = self.visit(funccall.return_value)
-        self.add_const(return_value, funccall.type_)
+        self.add_const(return_value, funccall.type_, funccall)
         postconditions = [
             self.visit(condition) for condition in funccall.postconditions
         ]
         post = self.and_exprs(postconditions)
         # Assign temp var
-        self.stmts.append(Assume(post))
+        self.add_stmt(Assume(post), funccall)
         return return_value
+
+    def visit_NamedExpr(self, expr: mir.NamedExpr):
+        rhs = self.visit(expr.rhs)
+        self.visit(expr.assignment)
+        return rhs
 
 
 def lower_mir_to_lir(mir: mir.Module) -> Model:

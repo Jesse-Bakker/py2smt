@@ -26,6 +26,7 @@ PREDEFINED_FUNCTIONS = {
     -12: mir.Func(id=mir.FuncId(-12), ident=mir.Ident("and")),
     -13: mir.Func(id=mir.FuncId(-13), ident=mir.Ident("or")),
     -14: mir.Func(id=mir.FuncId(-14), ident=mir.Ident("not")),
+    -15: mir.Func(id=mir.FuncId(-5), ident=mir.Ident("div")),
 }
 PREDEFINED_FUNCTION_MAP = {
     BO.ADD: -1,
@@ -43,6 +44,7 @@ PREDEFINED_FUNCTION_MAP = {
     BO.OR: -13,
     UO.NOT: -14,
     UO.SUB: -2,
+    BO.FLOORDIV: -15,
 }
 
 
@@ -66,6 +68,10 @@ class Branch:
         default_factory=dict
     )
     _condition: typing.Optional[mir.Expr] = None
+
+    def havoc(self, idents: typing.List[mir.Ident]):
+        for ident in idents:
+            self.store_var(ident, self.resolve_var(ident).type_)
 
     @property
     def condition(self):
@@ -169,7 +175,7 @@ class HirVisitor(Visitor):
             self.scope.store_var(
                 type_=name.type_,
                 ident=mir.Ident(name.ident),
-            )
+            ).ast_node = name.ast_node
         return self.scope.resolve_var(name.ident)
 
     def visit_Assert(self, assertion: hir.Assert) -> mir.Assert:
@@ -178,8 +184,9 @@ class HirVisitor(Visitor):
         )
 
     def visit_Assign(self, assign: hir.Assign) -> mir.Assign:
-        lhs = self.visit(assign.lhs)
+        # If assigning to self, rhs is an older version, so resolve it first
         rhs = self.visit(assign.rhs)
+        lhs = self.visit(assign.lhs)
         return mir.Assign(path_condition=self.scope.condition, lhs=lhs, rhs=rhs)
 
     def visit_BinExpr(self, expr: hir.BinExpr):
@@ -262,6 +269,7 @@ class HirVisitor(Visitor):
         postcondition_assert = mir.Assert(
             test=postcondition, path_condition=self.scope.condition
         )
+        postcondition_assert.ast_node = funcdef.post_astnode
 
         body = [*preconditions, *body, postcondition_assert]
 
@@ -305,6 +313,49 @@ class HirVisitor(Visitor):
             postconditions=postconditions,
             return_value=return_value,
         )
+
+    def and_exprs(self, exprs: typing.List[mir.Expr]):
+        return mir.Call(
+            func=mir.FuncId(PREDEFINED_FUNCTION_MAP[BO.AND]),
+            type_=bool,
+            args=exprs,
+        )
+
+    def visit_Loop(self, loop: hir.Loop):
+        def resolve_invariants(loop: hir.Loop):
+            invariants = [self.visit(invariant) for invariant in loop.invariants]
+            return self.and_exprs(invariants)
+
+        pre = mir.Assert(
+            path_condition=self.scope.condition, test=resolve_invariants(loop)
+        )
+        # Resolve invariants in outer loop
+        self.scope.havoc(loop.variables)
+
+        body = [
+            mir.Assumption(
+                path_condition=self.scope.condition,
+                expr=self.and_exprs([resolve_invariants(loop), self.visit(loop.test)]),
+            ),
+            *self.visit_stmts(loop.body),
+            mir.Assert(
+                path_condition=self.scope.condition, test=resolve_invariants(loop)
+            ),
+        ]
+        self.scope.havoc(loop.variables)
+
+        post = mir.Assumption(
+            path_condition=self.scope.condition,
+            expr=self.and_exprs(
+                [resolve_invariants(loop), self.not_expr(self.visit(loop.test))]
+            ),
+        )
+        return [pre, *body, post]
+
+    def visit_NamedExpr(self, expr: hir.NamedExpr):
+        rhs = self.visit(expr.rhs)
+        assign = self.visit(expr.assignment)
+        return mir.NamedExpr(rhs=rhs, assignment=assign, type_=expr.type_)
 
 
 def lower_hir_to_mir(hir: hir.Module):

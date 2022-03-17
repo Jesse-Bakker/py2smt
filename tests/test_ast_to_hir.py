@@ -259,3 +259,34 @@ def func(a: int):
             body=[hir.Pass()],
         ),
     )
+
+
+def test_loop():
+    syntax = ast.parse(
+        """
+while True:
+    loop_invariant(2 > 3)
+    a = 1
+"""
+    )
+    check_hir_stmt(
+        syntax,
+        hir.Loop(
+            invariants=[
+                hir.BinExpr(
+                    lhs=hir.Constant(type_=int, value=2),
+                    rhs=hir.Constant(type_=int, value=3),
+                    op=hir.BinOperator.GT,
+                    type_=bool,
+                )
+            ],
+            body=[
+                hir.Assign(
+                    lhs=hir.Name(ident="a", type_=int, ctx=hir.ExprContext.STORE),
+                    rhs=hir.Constant(value=1, type_=int),
+                )
+            ],
+            test=hir.Constant(type_=bool, value=True),
+            variables=["a"],
+        ),
+    )

@@ -1,5 +1,6 @@
 import ast
-from typing import Iterable, List
+from copy import copy
+from typing import Iterable, List, Set
 
 from py2smt.exceptions import IllegalOperationException
 
@@ -9,7 +10,20 @@ from . import types as hir
 class AstVisitor(ast.NodeVisitor):
     def __init__(self):
         super().__init__()
-        self.names = {}
+        self.names = {"loop_invariant": bool}
+        self.lookup_stack: List[Set[str]] = [set()]
+
+    def add_ast(self, node, ast_node):
+        if isinstance(node, list) or isinstance(node, tuple):
+            for n in node:
+                self.add_ast(n, ast_node)
+        elif node:
+            node.ast_node = ast_node
+
+    def visit(self, node):
+        result = super().visit(node)
+        self.add_ast(result, node)
+        return result
 
     def generic_visit(self, node):
         raise hir.UnsupportedException(
@@ -42,7 +56,7 @@ class AstVisitor(ast.NodeVisitor):
         }
         return hir.BinExpr(type_=bool, lhs=lhs, rhs=rhs, op=operator_map[type(op)])
 
-    def visit_BinOp(self, node) -> hir.BinExpr:
+    def visit_BinOp(self, node):
         BO = hir.BinOperator
         operator_map = {
             ast.Add: BO.ADD,
@@ -186,23 +200,26 @@ class AstVisitor(ast.NodeVisitor):
         test = self.expr_to_bool(test)
         return hir.Assert(test=test)
 
+    def assign(self, name: ast.AST, to: hir.Expr):
+        if not isinstance(name, ast.Name):
+            raise hir.UnsupportedException("Only assignments to names are supported")
+        type_ = to.type_
+        self.names[name.id] = type_
+        self.lookup_stack[-1].add(name.id)
+        lhs = hir.Name(type_=type_, ident=name.id, ctx=hir.ExprContext.STORE)
+        lhs.ast_node = name
+        return hir.Assign(lhs=lhs, rhs=to)
+
     def visit_Assign(self, node: ast.Assign) -> List[hir.Assign]:
         targets = node.targets
         rhs: hir.Expr = self.visit(node.value)
-        type_ = rhs.type_
         stmts = []
         for name in targets:
             if not isinstance(name, ast.Name):
                 raise hir.UnsupportedException(
                     "Only assignments to names are supported"
                 )
-            self.names[name.id] = type_
-            stmts.append(
-                hir.Assign(
-                    lhs=hir.Name(type_=type_, ident=name.id, ctx=hir.ExprContext.STORE),
-                    rhs=rhs,
-                )
-            )
+            stmts.append(self.assign(name, rhs))
         return stmts
 
     def visit_Name(self, node: ast.Name) -> hir.Name:
@@ -212,6 +229,7 @@ class AstVisitor(ast.NodeVisitor):
 
         assert isinstance(node.ctx, ast.Load), "Unexpected Store in visit_Name"
 
+        self.lookup_stack[-1].add(node.id)
         return hir.Name(
             type_=self.names[node.id], ident=node.id, ctx=hir.ExprContext.LOAD
         )
@@ -273,12 +291,13 @@ class AstVisitor(ast.NodeVisitor):
             args[arg.arg] = hir.Name(
                 ident=arg.arg, type_=type_, ctx=hir.ExprContext.LOAD
             )
+            args[arg.arg].ast_node = arg
 
         # We use a subvisitor here so only the function arguments are in scope.
         # This prevents name clashes when resolving pre- and post-conditions
         # and the function body.
         subvisitor = AstVisitor()
-        subvisitor.names = {name: arg.type_ for name, arg in args.items()}
+        subvisitor.names.update({name: arg.type_ for name, arg in args.items()})
         subvisitor.names["__return__"] = return_type
 
         def resolve_condition(condition: ast.Call):
@@ -287,6 +306,8 @@ class AstVisitor(ast.NodeVisitor):
 
         preconditions = []
         postconditions = []
+        pre_astnode = None
+        post_astnode = None
         for decorator in node.decorator_list:
             if isinstance(decorator, ast.Call):
                 if not isinstance(decorator.func, ast.Name):
@@ -295,8 +316,10 @@ class AstVisitor(ast.NodeVisitor):
                     )
                 if decorator.func.id == "assumes":
                     preconditions.extend(resolve_condition(decorator))
+                    pre_astnode = decorator
                 elif decorator.func.id == "ensures":
                     postconditions.extend(resolve_condition(decorator))
+                    post_astnode = decorator
                 else:
                     raise hir.UnsupportedException(
                         "Only pre- and post-condition decorators are supported"
@@ -315,6 +338,8 @@ class AstVisitor(ast.NodeVisitor):
             ret_type=return_type,
             arguments=list(args.values()),
             body=body,
+            pre_astnode=pre_astnode,
+            post_astnode=post_astnode,
         )
 
     def visit_Return(self, node: ast.Return):
@@ -329,6 +354,7 @@ class AstVisitor(ast.NodeVisitor):
             ident="__return__",
             ctx=hir.ExprContext.STORE,
         )
+        name.ast_node = node.value
         return hir.Assign(lhs=name, rhs=self.visit(node.value))
 
     def visit_Pass(self, node: ast.Pass) -> hir.Pass:
@@ -349,6 +375,64 @@ class AstVisitor(ast.NodeVisitor):
         ident = node.func.id
         args = [self.visit(arg) for arg in node.args]
         return hir.Call(type_=self.names[ident], args=args, func=ident)
+
+    def visit_While(self, node: ast.While):
+        self.lookup_stack.append(set())
+        test = self.visit(node.test)
+        body = self.flatten_stmts([self.visit(stmt) for stmt in node.body])
+        error = hir.UnsupportedException(
+            "Loops without loop invariants are not supported"
+        )
+
+        try:
+            invariant_stmt, body = body[0], body[1:] if len(body) > 1 else []
+            if not isinstance(invariant_stmt, hir.ExprStmt) or not isinstance(
+                call := invariant_stmt.expr, hir.Call
+            ):
+                raise error
+            if not call.func == "loop_invariant":
+                raise error
+            invariants = call.args
+        except IndexError:
+            raise error
+        variables = list(self.lookup_stack.pop())
+        return hir.Loop(
+            test=test, body=body, invariants=invariants, variables=variables
+        )
+
+    def visit_AugAssign(self, node: ast.AugAssign):
+        BO = hir.BinOperator
+        operator_map = {
+            ast.Add: BO.ADD,
+            ast.Sub: BO.SUB,
+            ast.Mult: BO.MUL,
+            ast.Div: BO.DIV,
+            ast.Mod: BO.MOD,
+            ast.Pow: BO.POW,
+            ast.LShift: BO.LSHIFT,
+            ast.RShift: BO.RSHIFT,
+            ast.BitOr: BO.BITOR,
+            ast.BitXor: BO.BITXOR,
+            ast.BitAnd: BO.BITAND,
+            ast.FloorDiv: BO.FLOORDIV,
+        }
+        target = node.target
+        if not isinstance(target, ast.Name):
+            raise hir.UnsupportedException("Assigning is only supported for names")
+        # Copy here, because we mutate the ast node, just in case
+        target = copy(target)
+        target.ctx = ast.Load()
+        load = self.visit(target)
+        rhs = self.visit(node.value)
+        binop = hir.BinExpr(
+            lhs=load, rhs=rhs, op=operator_map[type(node.op)], type_=load.type_
+        )
+        return self.assign(node.target, binop)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr):
+        rhs = self.visit(node.value)
+        assign = self.assign(node.target, rhs)
+        return hir.NamedExpr(assignment=assign, rhs=rhs, type_=rhs.type_)
 
 
 def lower_ast_to_hir(ast: ast.AST):

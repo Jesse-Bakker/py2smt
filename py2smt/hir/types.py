@@ -1,6 +1,15 @@
+import ast
 import typing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
+
+
+@dataclass
+class Node:
+    ast_node: typing.Optional[ast.AST] = field(compare=False, init=False)
+
+    def __post_init__(self):
+        self.ast_node = None
 
 
 class UnsupportedException(Exception):
@@ -49,7 +58,7 @@ class UnaryOperator(Enum):
 
 
 @dataclass
-class Expr:
+class Expr(Node):
     type_: type
 
 
@@ -72,7 +81,7 @@ class Constant(Expr):
 
 
 @dataclass
-class Stmt:
+class Stmt(Node):
     pass
 
 
@@ -99,7 +108,7 @@ class Assign(Stmt):
 
 
 @dataclass
-class Module:
+class Module(Node):
     body: typing.List[Stmt]
 
 
@@ -124,9 +133,25 @@ class FuncDef(Stmt):
     ret_type: type
     arguments: typing.List[Name]
     body: typing.List[Stmt]
+    pre_astnode: typing.Optional[ast.AST] = field(compare=False, default=None)
+    post_astnode: typing.Optional[ast.AST] = field(compare=False, default=None)
 
 
 @dataclass
 class Call(Expr):
     func: str
     args: typing.List[Expr]
+
+
+@dataclass
+class Loop(Stmt):
+    invariants: typing.List[Expr]
+    test: Expr
+    body: typing.List[Stmt]
+    variables: typing.List[str]
+
+
+@dataclass
+class NamedExpr(Expr):
+    assignment: Assign
+    rhs: Expr

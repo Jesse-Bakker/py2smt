@@ -1,1 +1,1 @@
-from .lower import ValidityScope, lower_mir_to_lir
+from .lower import Scope, ValidityScope, lower_mir_to_lir
