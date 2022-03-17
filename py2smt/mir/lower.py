@@ -1,5 +1,7 @@
+from __future__ import annotations  # Allow self-referential types without quotes
+
 import typing
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass, field
 
 from py2smt import hir
@@ -24,7 +26,6 @@ PREDEFINED_FUNCTIONS = {
     -12: mir.Func(id=mir.FuncId(-12), ident=mir.Ident("and")),
     -13: mir.Func(id=mir.FuncId(-13), ident=mir.Ident("or")),
     -14: mir.Func(id=mir.FuncId(-14), ident=mir.Ident("not")),
-    -15: mir.Func(id=mir.FuncId(-15), ident=mir.Ident("-")),
 }
 PREDEFINED_FUNCTION_MAP = {
     BO.ADD: -1,
@@ -41,19 +42,27 @@ PREDEFINED_FUNCTION_MAP = {
     BO.AND: -12,
     BO.OR: -13,
     UO.NOT: -14,
-    UO.SUB: -15,
+    UO.SUB: -2,
 }
 
 
 @dataclass
-class Scope:
-    parent: typing.Optional["Scope"] = None
+class DeclaredFunc:
+    args: OrderedDict[str, hir.Name]
+    preconditions: typing.List[hir.Expr]
+    postconditions: typing.List[hir.Expr]
+
+
+@dataclass
+class Branch:
+    parent: typing.Optional[Branch] = None
     idx: int = 0
 
+    name: typing.Optional[str] = None
     # Monotonically growing index. When merging subscopes, this does not reset to avoid conflicts with future subscopes
     subscope_idx: int = -1
-    subscopes: typing.List["Scope"] = field(default_factory=list)
-    variables: typing.Dict[mir.Ident, typing.List[mir.Var]] = field(
+    subscopes: typing.List[Branch] = field(default_factory=list)
+    variables: typing.Dict[mir.Ident, typing.List[mir.Expr]] = field(
         default_factory=dict
     )
     _condition: typing.Optional[mir.Expr] = None
@@ -72,26 +81,26 @@ class Scope:
             yield it
             it = it.parent
 
-    def subscope(self, condition=None) -> "Scope":
+    def subscope(self, condition=None) -> Branch:
         self.subscope_idx += 1
-        new = Scope(
+        new = Branch(
             parent=self, idx=self.subscope_idx, subscopes=[], _condition=condition
         )
         self.subscopes.append(new)
         return new
 
     def canonical_idx(self) -> typing.List[int]:
-        return list(reversed([scope.idx for scope in self.iter_parents()]))
+        return [scope.idx for scope in reversed(list(self.iter_parents()))]
 
-    def resolve_var(self, ident: mir.Ident) -> mir.Var:
+    def resolve_var(self, ident: mir.Ident) -> mir.Expr:
         """Resolve variable by identifier from this subscope upwards"""
-        for scope in self.iter_parents():
-            try:
-                return scope.variables[ident][-1]
-            except KeyError:
-                pass
-        else:
-            raise IllegalOperationException("Cannot LOAD undefined variable")
+        try:
+            return self.variables[ident][-1]
+        except KeyError:
+            if self.parent:
+                return self.parent.resolve_var(ident)
+            else:
+                raise IllegalOperationException("Cannot LOAD undefined variable")
 
     def reconcile_subscopes(self) -> (typing.List[mir.Assign]):
         """Pop direct subscopes and emit the proper assignments for reconciling them"""
@@ -141,16 +150,15 @@ class Scope:
 class HirVisitor(Visitor):
     def __init__(self):
         self.variables = defaultdict(list)
-        self.functions = []
         self.func_map = {}
 
-        self.scope = Scope()
+        self.scope = Branch()
 
-    def push_scope(self, condition=None) -> Scope:
+    def push_scope(self, condition=None, name=None) -> Branch:
         self.scope = self.scope.subscope(condition)
         return self.scope
 
-    def pop_scope(self) -> Scope:
+    def pop_scope(self) -> Branch:
         assert self.scope.parent is not None
         scope = self.scope
         self.scope = self.scope.parent
@@ -190,9 +198,8 @@ class HirVisitor(Visitor):
         return mir.Constant(type_=expr.type_, value=expr.value)
 
     def visit_ExprStmt(self, stmt: hir.ExprStmt):
-        return mir.ExprStmt(
-            path_condition=self.scope.condition, expr=self.visit(stmt.expr)
-        )
+        # Expr stmts are assumed to have no side-effects and can thus be dropped here
+        return None
 
     def not_expr(self, expr: mir.Expr):
         assert expr.type_ == bool
@@ -208,7 +215,7 @@ class HirVisitor(Visitor):
             visited = self.visit(stmt)
             if isinstance(visited, list):
                 ret.extend(visited)
-            else:
+            elif visited:
                 ret.append(visited)
         return ret
 
@@ -229,6 +236,74 @@ class HirVisitor(Visitor):
             vars=[var for ident in self.scope.variables.values() for var in ident],
             body=stmts,
             funcs={},
+        )
+
+    def visit_FuncDef(self, funcdef: hir.FuncDef) -> mir.FuncDef:
+        visitor = HirVisitor()
+
+        args = []
+        unresolved_args = OrderedDict()
+        # Functions have their own separate scope for var and func resolution
+        for arg in funcdef.arguments:
+            unresolved_args[arg.ident] = arg
+            args.append(visitor.scope.store_var(mir.Ident(arg.ident), arg.type_))
+
+        preconditions = [
+            mir.Assumption(path_condition=[], expr=visitor.visit(expr))
+            for expr in funcdef.preconditions
+        ]
+        body = visitor.visit_stmts(funcdef.body)
+        postconditions = [visitor.visit(expr) for expr in funcdef.postconditions]
+        postcondition = mir.Call(
+            type_=bool,
+            func=mir.FuncId(PREDEFINED_FUNCTION_MAP[BO.AND]),
+            args=postconditions,
+        )
+        postcondition_assert = mir.Assert(
+            test=postcondition, path_condition=self.scope.condition
+        )
+
+        body = [*preconditions, *body, postcondition_assert]
+
+        vars_ = [var for ident in visitor.scope.variables.values() for var in ident]
+        ret = mir.FuncDef(
+            path_condition=self.scope.condition,
+            name=mir.Ident(funcdef.name),
+            variables=vars_,
+            body=body,
+            ret_type=funcdef.ret_type,
+        )
+
+        self.func_map[funcdef.name] = DeclaredFunc(
+            args=unresolved_args,
+            preconditions=funcdef.preconditions,
+            postconditions=funcdef.postconditions,
+        )
+        return ret
+
+    def visit_Call(self, call: hir.Call):
+        declared_func: DeclaredFunc = self.func_map[call.func]
+        # Set up scope, so that function arguments resolve to our current versions
+        visitor = HirVisitor()
+        for (expr, arg) in zip(call.args, declared_func.args.values()):
+            visitor.scope.variables.setdefault(arg.ident, []).append(self.visit(expr))
+
+        # Resolve variables for preconditions
+        preconditions = [
+            visitor.visit(condition) for condition in declared_func.preconditions
+        ]
+
+        # Create var for return
+        return_value = visitor.scope.store_var("__return__", call.type_)
+        postconditions = [
+            visitor.visit(condition) for condition in declared_func.postconditions
+        ]
+        return mir.FuncCall(
+            type_=call.type_,
+            func_name=mir.Ident(call.func),
+            preconditions=preconditions,
+            postconditions=postconditions,
+            return_value=return_value,
         )
 
 

@@ -124,3 +124,9 @@ class FuncDef(Stmt):
     ret_type: type
     arguments: typing.List[Name]
     body: typing.List[Stmt]
+
+
+@dataclass
+class Call(Expr):
+    func: str
+    args: typing.List[Expr]

@@ -1,8 +1,8 @@
 import typing
 from collections import ChainMap
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-import z3
+import z3  # type: ignore
 
 from py2smt import mir
 from py2smt.visitor import Visitor
@@ -19,7 +19,7 @@ class Constant:
     value: typing.Any
 
     def to_smt(self):
-        return str(self.value)
+        return str(self.value).lower()
 
 
 @dataclass
@@ -51,9 +51,21 @@ class Assume:
 
 
 @dataclass
+class Scope:
+    stmts: typing.Any
+
+    def to_smt(self):
+        body = "\n".join(stmt.to_smt() for stmt in self.stmts if stmt)
+        return f"""(push 1)
+{body}
+(pop 1)"""
+
+
+@dataclass
 class ValidityScope:
     test: Expr
     assumptions: typing.List[Assume]
+    post: typing.List[Assume] = field(default_factory=list)
 
     def to_smt(self):
         assumptions = (
@@ -61,10 +73,13 @@ class ValidityScope:
             if self.assumptions
             else ""
         )
+        post = (
+            ("\n" + "\n".join(ass.to_smt() for ass in self.post)) if self.post else ""
+        )
         return f"""(push 1){assumptions}
 (assert (not {self.test.to_smt()}))
 (check-sat)
-(pop 1)"""
+(pop 1){post}"""
 
 
 @dataclass
@@ -91,10 +106,18 @@ class MirVisitor(Visitor):
 
     def __init__(self):
         self.func_map = ChainMap(mir.lower.PREDEFINED_FUNCTIONS)
+        self.prefix = ""
+        self.stmts = []
+        self.decls = []
+        self.call_ctr = 0
+        self.in_funcdef = False
 
     def visit_Var(self, var: mir.Var):
         scope = "_".join(str(idx) for idx in var.scope)
-        return Ident(ident=f"{var.ident}${scope}${var.version}")
+        prefix = self.prefix
+        if var.ident == "__return__" and not self.in_funcdef:
+            prefix = f"!call_{self.call_ctr}!" + prefix
+        return Ident(ident=f"{prefix}{var.ident}${scope}${var.version}")
 
     def visit_Constant(self, constant: mir.Constant):
         return Constant(constant.value)
@@ -107,32 +130,73 @@ class MirVisitor(Visitor):
             else:
                 condition = self.visit(pc[0])
             call = Call(func="=>", args=[condition, call])
-        return Assume(call)
+        self.stmts.append(Assume(call))
 
     def visit_Module(self, module: mir.Module):
-        decls = [
-            FunctionDef(sort=self.SORT_MAP[var.type_](), args=[], ident=self.visit(var))
-            for var in module.vars
-        ]
-
-        for func in module.funcs:
-            # TODO: add function def
-            break
+        for var in module.vars:
+            self.add_const(self.visit(var), var.type_)
 
         self.func_map.maps.append(module.funcs)
-        body = []
         for stmt in module.body:
-            if (visited := self.visit(stmt)) is not None:
-                body.append(visited)
+            self.visit(stmt)
 
-        return Model(function_defs=decls, body=body)
+        return Model(function_defs=self.decls, body=self.stmts)
 
     def visit_Call(self, call: mir.Call):
         func = self.func_map[call.func]
         return Call(func=func.ident, args=[self.visit(arg) for arg in call.args])
 
     def visit_Assert(self, assertion: mir.Assert):
-        return ValidityScope(test=self.visit(assertion.test), assumptions=[])
+        self.stmts.append(
+            ValidityScope(test=self.visit(assertion.test), assumptions=[])
+        )
+
+    def visit_FuncDef(self, funcdef: mir.FuncDef):
+        prefix = self.prefix
+        self.prefix = f"{prefix}{funcdef.name}!"
+        self.in_funcdef = True
+        variables = []
+        for variable in funcdef.variables:
+            variables.append(
+                FunctionDef(
+                    sort=self.SORT_MAP[variable.type_](),
+                    args=[],
+                    ident=self.visit(variable),
+                )
+            )
+        self.decls.extend(variables)
+        ret = Scope([self.visit(a) for a in funcdef.body])
+        self.prefix = prefix
+        self.stmts.append(ret)
+        self.in_funcdef = False
+
+    def visit_Assumption(self, assumption: mir.Assumption):
+        self.stmts.append(Assume(self.visit(assumption.expr)))
+
+    def and_exprs(self, exprs: typing.List[Expr]):
+        return Call(func="and", args=exprs)
+
+    def add_const(self, ident: Ident, type_: type):
+        def_ = FunctionDef(sort=self.SORT_MAP[type_](), ident=ident, args=[])
+        self.decls.append(def_)
+
+    def visit_FuncCall(self, funccall: mir.FuncCall):
+
+        preconditions = [self.visit(condition) for condition in funccall.preconditions]
+        if preconditions:
+            pre = self.and_exprs(preconditions)
+            self.stmts.append(ValidityScope(test=pre, assumptions=[]))
+
+        self.call_ctr += 1
+        return_value = self.visit(funccall.return_value)
+        self.add_const(return_value, funccall.type_)
+        postconditions = [
+            self.visit(condition) for condition in funccall.postconditions
+        ]
+        post = self.and_exprs(postconditions)
+        # Assign temp var
+        self.stmts.append(Assume(post))
+        return return_value
 
 
 def lower_mir_to_lir(mir: mir.Module) -> Model:

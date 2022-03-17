@@ -10,6 +10,8 @@ parser.add_argument("file", action="store", type=argparse.FileType("r"))
 args = parser.parse_args(sys.argv[1:])
 _, smt, errors = check_inner(args.file.read())
 
+if args.output_smt:
+    print("\n".join(smt))
 if errors:
     print(errors)
     sys.exit(1)

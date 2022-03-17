@@ -1,28 +1,20 @@
+from unittest import mock
+
+_param = mock.MagicMock()
+_param.__gt__ = mock.Mock()
+_param.__lt__ = mock.Mock()
+_param.__le__ = mock.Mock()
+_param.__ge__ = mock.Mock()
+
+
 class _ParamImpl:
     def __getattr__(self, name):
-        return Param()
-
-
-class Param:
-    def __eq__(self, o):
-        pass
-
-    def __lt__(self, o):
-        pass
-
-    def __gt__(self, o):
-        pass
-
-    def __gte__(self, o):
-        pass
-
-    def __lte__(self, o):
-        pass
+        return _param
 
 
 param = _ParamImpl()
 
-__return__ = Param()
+__return__ = _param
 
 
 def __old__(*args, **kwargs):

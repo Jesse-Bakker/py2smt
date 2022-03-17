@@ -38,7 +38,7 @@ class Stmt:
 
 
 @dataclass
-class ExprStmt(Stmt):
+class Assumption(Stmt):
     expr: Expr
 
 
@@ -63,3 +63,20 @@ class Module:
     vars: typing.List[Var]
     body: typing.List[Stmt]
     funcs: typing.Mapping[FuncId, Func]
+
+
+@dataclass
+class FuncDef(Stmt):
+    name: Ident
+
+    ret_type: type
+    variables: typing.List[Var]
+    body: typing.List[Stmt]
+
+
+@dataclass
+class FuncCall(Expr):
+    func_name: Ident
+    preconditions: typing.List[Expr]
+    postconditions: typing.List[Expr]
+    return_value: Var

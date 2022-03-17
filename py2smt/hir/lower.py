@@ -2,25 +2,8 @@ import ast
 from typing import Iterable, List
 
 from py2smt.exceptions import IllegalOperationException
-from py2smt.hir.types import (
-    Assert,
-    Assign,
-    BinExpr,
-    BinOperator,
-    Constant,
-    Expr,
-    ExprContext,
-    ExprStmt,
-    FuncDef,
-    If,
-    Module,
-    Name,
-    Pass,
-    Stmt,
-    UnaryExpr,
-    UnaryOperator,
-    UnsupportedException,
-)
+
+from . import types as hir
 
 
 class AstVisitor(ast.NodeVisitor):
@@ -29,35 +12,38 @@ class AstVisitor(ast.NodeVisitor):
         self.names = {}
 
     def generic_visit(self, node):
-        print(node)
-        assert False, "Unreachable"
+        raise hir.UnsupportedException(
+            f"The syntactic construct {type(node).__name__} is not supported"
+        )
 
     def visit_Compare(self, node: ast.Compare):
         if len(node.comparators) > 1:
-            raise UnsupportedException("Chained comparisons are not supported")
+            raise hir.UnsupportedException("Chained comparisons are not supported")
         lhs = self.visit(node.left)
         rhs = self.visit(node.comparators[0])
         op = node.ops[0]
 
         if isinstance(op, ast.NotEq):
-            return UnaryExpr(
+            return hir.UnaryExpr(
                 type_=bool,
-                op=UnaryOperator.NOT,
-                operand=BinExpr(lhs=lhs, rhs=rhs, op=BinOperator.EQ, type_=bool),
+                op=hir.UnaryOperator.NOT,
+                operand=hir.BinExpr(
+                    lhs=lhs, rhs=rhs, op=hir.BinOperator.EQ, type_=bool
+                ),
             )
 
-        BO = BinOperator
+        BO = hir.BinOperator
         operator_map = {
             ast.Eq: BO.EQ,
-            ast.Lt: BO.MUL,
-            ast.LtE: BO.DIV,
+            ast.Lt: BO.LT,
+            ast.LtE: BO.LTE,
             ast.Gt: BO.GT,
-            ast.GtE: BO.POW,
+            ast.GtE: BO.GTE,
         }
-        return BinExpr(type_=bool, lhs=lhs, rhs=rhs, op=operator_map[type(op)])
+        return hir.BinExpr(type_=bool, lhs=lhs, rhs=rhs, op=operator_map[type(op)])
 
-    def visit_BinOp(self, node) -> BinExpr:
-        BO = BinOperator
+    def visit_BinOp(self, node) -> hir.BinExpr:
+        BO = hir.BinOperator
         operator_map = {
             ast.Add: BO.ADD,
             ast.Sub: BO.SUB,
@@ -73,8 +59,8 @@ class AstVisitor(ast.NodeVisitor):
             ast.FloorDiv: BO.FLOORDIV,
         }
 
-        lhs: Expr = self.visit(node.left)
-        rhs: Expr = self.visit(node.right)
+        lhs: hir.Expr = self.visit(node.left)
+        rhs: hir.Expr = self.visit(node.right)
 
         type_: type
         if issubclass(lhs.type_, int) and issubclass(rhs.type_, int):
@@ -82,7 +68,7 @@ class AstVisitor(ast.NodeVisitor):
         elif issubclass(rhs.type_, float) or issubclass(lhs.type_, float):
             type_ = float
         else:
-            raise UnsupportedException(
+            raise hir.UnsupportedException(
                 "Only int, bool and float types are supported in binary expressions"
             )
 
@@ -94,7 +80,7 @@ class AstVisitor(ast.NodeVisitor):
             raise IllegalOperationException(
                 "Bit operations are only allowed on integer types"
             )
-        return BinExpr(lhs=lhs, rhs=rhs, op=op, type_=type_)
+        return hir.BinExpr(lhs=lhs, rhs=rhs, op=op, type_=type_)
 
     def visit_BoolOp(self, node: ast.BoolOp):
         lhs = self.visit(node.values[0])
@@ -104,34 +90,34 @@ class AstVisitor(ast.NodeVisitor):
         if not issubclass(lhs.type_, (int, float)) or not issubclass(
             rhs.type_, (int, float)
         ):
-            raise UnsupportedException(
+            raise hir.UnsupportedException(
                 "Boolean operators are only supported on bools, ints and floats"
             )
 
         if isinstance(node.op, ast.And):
-            op = BinOperator.AND
+            op = hir.BinOperator.AND
         elif isinstance(node.op, ast.Or):
-            op = BinOperator.OR
+            op = hir.BinOperator.OR
         else:
             assert False, "Unexpected boolean operator"
 
         if lhs.type_ is not rhs.type_:
-            raise UnsupportedException(
+            raise hir.UnsupportedException(
                 "Boolean operators are only supported on operands of the same type"
             )
-        return BinExpr(lhs=lhs, rhs=rhs, type_=lhs.type_, op=op)
+        return hir.BinExpr(lhs=lhs, rhs=rhs, type_=lhs.type_, op=op)
 
     def visit_Constant(self, node: ast.Constant):
-        return Constant(type_=type(node.value), value=node.value)
+        return hir.Constant(type_=type(node.value), value=node.value)
 
     def visit_Expr(self, node: ast.Expr):
-        return ExprStmt(expr=self.visit(node.value))
+        return hir.ExprStmt(expr=self.visit(node.value))
 
     def visit_Module(self, node: ast.Module):
         # Stmts can be split into multiple statements, for example with multiple
         # assignment: `a = b = 2 -> a = 2; b = 2`, so we unpack here
         stmts = self.flatten_stmts([self.visit(stmt) for stmt in node.body])
-        return Module(body=stmts)
+        return hir.Module(body=stmts)
 
     def visit_UnaryOp(self, node: ast.UnaryOp):
         op = node.op
@@ -140,36 +126,38 @@ class AstVisitor(ast.NodeVisitor):
         if isinstance(op, ast.UAdd):
             return operand
         elif isinstance(op, ast.Not):
-            return UnaryExpr(
-                type_=bool, op=UnaryOperator.NOT, operand=self.expr_to_bool(operand)
+            return hir.UnaryExpr(
+                type_=bool, op=hir.UnaryOperator.NOT, operand=self.expr_to_bool(operand)
             )
         elif isinstance(op, ast.USub):
             if operand.type_ not in (int, float):
                 raise IllegalOperationException(
                     "The Invert operator `~` is only allowed on numeric types"
                 )
-            return UnaryExpr(type_=int, op=UnaryOperator.SUB, operand=operand)
+            return hir.UnaryExpr(type_=int, op=hir.UnaryOperator.SUB, operand=operand)
         elif isinstance(op, ast.Invert):
             if operand.type_ is not int:
                 raise IllegalOperationException(
                     "The Invert operator `~` is only allowed on integers"
                 )
-            return UnaryExpr(type_=int, op=UnaryOperator.INVERT, operand=operand)
+            return hir.UnaryExpr(
+                type_=int, op=hir.UnaryOperator.INVERT, operand=operand
+            )
         assert False, "Unexpected unary operator {op}"
 
-    def expr_to_bool(self, expr: Expr):
+    def expr_to_bool(self, expr: hir.Expr):
         if expr.type_ is bool:
             return expr
 
         def make_expr(type_, value):
-            return UnaryExpr(
+            return hir.UnaryExpr(
                 type_=bool,
-                op=UnaryOperator.NOT,
-                operand=BinExpr(
+                op=hir.UnaryOperator.NOT,
+                operand=hir.BinExpr(
                     type_=bool,
                     lhs=expr,
-                    rhs=Constant(type_=type_, value=value),
-                    op=BinOperator.EQ,
+                    rhs=hir.Constant(type_=type_, value=value),
+                    op=hir.BinOperator.EQ,
                 ),
             )
 
@@ -178,11 +166,13 @@ class AstVisitor(ast.NodeVisitor):
         elif expr.type_ is float:
             return make_expr(float, 0.0)
         else:
-            raise UnsupportedException(
+            raise hir.UnsupportedException(
                 "Only `int`s and `float`s can be converted to boolean expressions"
             )
 
-    def flatten_stmts(self, stmts: Iterable[Stmt | Iterable[Stmt]]) -> List[Stmt]:
+    def flatten_stmts(
+        self, stmts: Iterable[hir.Stmt | Iterable[hir.Stmt]]
+    ) -> List[hir.Stmt]:
         ret = []
         for stmt in stmts:
             if isinstance(stmt, Iterable):
@@ -192,44 +182,49 @@ class AstVisitor(ast.NodeVisitor):
         return ret
 
     def visit_Assert(self, node: ast.Assert):
-        test: Expr = self.visit(node.test)
+        test: hir.Expr = self.visit(node.test)
         test = self.expr_to_bool(test)
-        return Assert(test=test)
+        return hir.Assert(test=test)
 
-    def visit_Assign(self, node: ast.Assign) -> List[Assign]:
+    def visit_Assign(self, node: ast.Assign) -> List[hir.Assign]:
         targets = node.targets
-        rhs: Expr = self.visit(node.value)
+        rhs: hir.Expr = self.visit(node.value)
         type_ = rhs.type_
         stmts = []
         for name in targets:
             if not isinstance(name, ast.Name):
-                raise UnsupportedException("Only assignments to names are supported")
+                raise hir.UnsupportedException(
+                    "Only assignments to names are supported"
+                )
             self.names[name.id] = type_
             stmts.append(
-                Assign(
-                    lhs=Name(type_=type_, ident=name.id, ctx=ExprContext.STORE), rhs=rhs
+                hir.Assign(
+                    lhs=hir.Name(type_=type_, ident=name.id, ctx=hir.ExprContext.STORE),
+                    rhs=rhs,
                 )
             )
         return stmts
 
-    def visit_Name(self, node: ast.Name) -> Name:
+    def visit_Name(self, node: ast.Name) -> hir.Name:
         # We only care about loads here, as we handle stores in `visit_Assign`
         if isinstance(node.ctx, ast.Del):
-            raise UnsupportedException("Del'ing names is not supported")
+            raise hir.UnsupportedException("Del'ing names is not supported")
 
         assert isinstance(node.ctx, ast.Load), "Unexpected Store in visit_Name"
 
-        return Name(type_=self.names[node.id], ident=node.id, ctx=ExprContext.LOAD)
+        return hir.Name(
+            type_=self.names[node.id], ident=node.id, ctx=hir.ExprContext.LOAD
+        )
 
-    def visit_If(self, node: ast.If) -> If:
+    def visit_If(self, node: ast.If) -> hir.If:
         test = self.expr_to_bool(self.visit(node.test))
         body = self.flatten_stmts([self.visit(stmt) for stmt in node.body])
 
         orelse = self.flatten_stmts([self.visit(stmt) for stmt in node.orelse])
-        return If(test=test, body=body, orelse=orelse)
+        return hir.If(test=test, body=body, orelse=orelse)
 
-    def visit_Attribute(self, attr: ast.Attribute) -> Name:
-        error = UnsupportedException("Attribute access is not supported")
+    def visit_Attribute(self, attr: ast.Attribute) -> hir.Name:
+        error = hir.UnsupportedException("Attribute access is not supported")
 
         if isinstance(attr.value, ast.Attribute):
             if not isinstance(attr.value.value, ast.Name) or not (
@@ -242,7 +237,7 @@ class AstVisitor(ast.NodeVisitor):
             name = attr.attr
         else:
             raise error
-        return Name(type_=self.names[name], ident=name, ctx=ExprContext.LOAD)
+        return hir.Name(type_=self.names[name], ident=name, ctx=hir.ExprContext.LOAD)
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
         name = node.name
@@ -251,11 +246,11 @@ class AstVisitor(ast.NodeVisitor):
             if isinstance(annotation, ast.Name):
                 t = eval(annotation.id)
             else:
-                raise UnsupportedException(
+                raise hir.UnsupportedException(
                     "Only `type` return type expressions are supported"
                 )
             if t not in (int, bool, float):
-                raise UnsupportedException(
+                raise hir.UnsupportedException(
                     f"Unsupported return type for function `{name}`"
                 )
             return t
@@ -263,7 +258,7 @@ class AstVisitor(ast.NodeVisitor):
         return_type = type_from_annotation(node.returns) if node.returns else None
         # Only regular arguments are supported for now
         if node.args.posonlyargs or node.args.kwonlyargs or node.args.defaults:
-            raise UnsupportedException(
+            raise hir.UnsupportedException(
                 "Only regular, non-defaulted, type-annotated arguments are supported. "
                 f"Violating function: {name}"
             )
@@ -271,17 +266,20 @@ class AstVisitor(ast.NodeVisitor):
         args = {}
         for arg in node.args.args:
             if not arg.annotation:
-                raise UnsupportedException(
+                raise hir.UnsupportedException(
                     "Only type-annotated arguments are supported"
                 )
             type_ = type_from_annotation(arg.annotation)
-            args[arg.arg] = Name(ident=arg.arg, type_=type_, ctx=ExprContext.LOAD)
+            args[arg.arg] = hir.Name(
+                ident=arg.arg, type_=type_, ctx=hir.ExprContext.LOAD
+            )
 
         # We use a subvisitor here so only the function arguments are in scope.
         # This prevents name clashes when resolving pre- and post-conditions
         # and the function body.
         subvisitor = AstVisitor()
         subvisitor.names = {name: arg.type_ for name, arg in args.items()}
+        subvisitor.names["__return__"] = return_type
 
         def resolve_condition(condition: ast.Call):
             for expr in condition.args:
@@ -292,7 +290,7 @@ class AstVisitor(ast.NodeVisitor):
         for decorator in node.decorator_list:
             if isinstance(decorator, ast.Call):
                 if not isinstance(decorator.func, ast.Name):
-                    raise UnsupportedException(
+                    raise hir.UnsupportedException(
                         "Higher level functions are not supported"
                     )
                 if decorator.func.id == "assumes":
@@ -300,16 +298,17 @@ class AstVisitor(ast.NodeVisitor):
                 elif decorator.func.id == "ensures":
                     postconditions.extend(resolve_condition(decorator))
                 else:
-                    raise UnsupportedException(
+                    raise hir.UnsupportedException(
                         "Only pre- and post-condition decorators are supported"
                     )
             else:
-                raise UnsupportedException(
+                raise hir.UnsupportedException(
                     "Only pre- and post-condition decorators are supported"
                 )
 
         body = self.flatten_stmts([subvisitor.visit(stmt) for stmt in node.body])
-        return FuncDef(
+        self.names[name] = return_type
+        return hir.FuncDef(
             name=name,
             preconditions=preconditions,
             postconditions=postconditions,
@@ -318,17 +317,38 @@ class AstVisitor(ast.NodeVisitor):
             body=body,
         )
 
-    def visit_Pass(self, node: ast.Pass) -> Pass:
-        return Pass()
+    def visit_Return(self, node: ast.Return):
+        if not node.value:
+            raise hir.UnsupportedException(
+                "Functions must always return a value; this returns None"
+            )
+
+        # A return is an assignment to the special return value __return__
+        name = hir.Name(
+            type_=self.names["__return__"],
+            ident="__return__",
+            ctx=hir.ExprContext.STORE,
+        )
+        return hir.Assign(lhs=name, rhs=self.visit(node.value))
+
+    def visit_Pass(self, node: ast.Pass) -> hir.Pass:
+        return hir.Pass()
 
     def visit_Import(self, node: ast.Import):
         if any(name != "py2smt" for name in node.names):
-            raise UnsupportedException("Imports are not supported")
+            raise hir.UnsupportedException("Imports are not supported")
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
         # Very crude. Maybe resolve the import?
         if node.module != "py2smt":
-            raise UnsupportedException("Imports are not supported")
+            raise hir.UnsupportedException("Imports are not supported")
+
+    def visit_Call(self, node: ast.Call):
+        if not isinstance(node.func, ast.Name):
+            raise hir.UnsupportedException("Higher level functions are not supported")
+        ident = node.func.id
+        args = [self.visit(arg) for arg in node.args]
+        return hir.Call(type_=self.names[ident], args=args, func=ident)
 
 
 def lower_ast_to_hir(ast: ast.AST):
