@@ -32,7 +32,9 @@ class AstVisitor(ast.NodeVisitor):
 
     def visit_Compare(self, node: ast.Compare):
         if len(node.comparators) > 1:
-            raise hir.UnsupportedException("Chained comparisons are not supported")
+            raise hir.UnsupportedException(
+                "Chained comparisons are not supported. Please split them into multiple comparisons"
+            )
         lhs = self.visit(node.left)
         rhs = self.visit(node.comparators[0])
         op = node.ops[0]
@@ -99,7 +101,7 @@ class AstVisitor(ast.NodeVisitor):
     def visit_BoolOp(self, node: ast.BoolOp):
         if len(node.values) > 2:
             raise hir.UnsupportedException(
-                "Chained boolean operators are not supported"
+                "Chained boolean operators are not supported. Please use parentheses to split them up"
             )
         lhs = self.visit(node.values[0])
         rhs = self.visit(node.values[1])
