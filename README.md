@@ -1,4 +1,4 @@
-# Python-to-smt converter
+# Simple Python program verifier
 
 A python library to convert a subset of python to smtlib2
 
